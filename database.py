@@ -16,7 +16,7 @@ def create_tables():
             username TEXT,
             first_name TEXT,
             last_name TEXT,
-            subscription_status TEXT DEFAULT 'inactive',
+            subscription_status TEXT DEFAULT 'Не активирована',
             referral_code TEXT UNIQUE,
             referred_by INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -116,3 +116,20 @@ def get_referral_code(user_id):
 
     conn.close()
     return referral_code
+
+def get_active_subscription(user_id):
+    """Get user's active subscription with VPN details."""
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT plan, device_limit, vpn_username, vpn_password, vpn_key, end_date
+        FROM subscriptions
+        WHERE user_id = ? AND end_date > datetime('now')
+        ORDER BY end_date DESC
+        LIMIT 1
+    ''', (user_id,))
+
+    subscription = cursor.fetchone()
+    conn.close()
+    return subscription

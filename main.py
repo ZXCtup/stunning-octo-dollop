@@ -6,7 +6,7 @@ import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from config import TELEGRAM_BOT_TOKEN, SUBSCRIPTION_PLANS, ADMIN_IDS
-from database import create_tables, add_user, get_user, update_subscription, get_referral_code
+from database import create_tables, add_user, get_user, update_subscription, get_referral_code, get_active_subscription
 from config import DATABASE_FILE
 from api_client import api_client
 import random
@@ -21,6 +21,19 @@ def generate_password(length=12):
     characters = string.ascii_letters + string.digits  # Only letters and digits, no special characters
     return ''.join(random.choice(characters) for i in range(length))
 
+def get_main_menu_keyboard(user_id):
+    """Get main menu keyboard."""
+    keyboard = [
+        [InlineKeyboardButton("Профиль", callback_data='profile')],
+        [InlineKeyboardButton("Реферальная ссылка", callback_data='referral')],
+        [InlineKeyboardButton("Купить подписку", callback_data='buy_subscription')],
+        [InlineKeyboardButton("Помощь", callback_data='help')]
+    ]
+    if user_id in ADMIN_IDS:
+        keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
+
+    return InlineKeyboardMarkup(keyboard)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /start command."""
     user = update.effective_user
@@ -32,21 +45,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Add user to database
     add_user(user_id, username, first_name, last_name)
 
-    # Create menu with buttons
-    keyboard = [
-        [InlineKeyboardButton("Профиль", callback_data='profile')],
-        [InlineKeyboardButton("Реферальная ссылка", callback_data='referral')],
-        [InlineKeyboardButton("Купить подписку", callback_data='buy_subscription')],
-        [InlineKeyboardButton("Помощь", callback_data='help')]
-    ]
-    if user_id in ADMIN_IDS:
-        keyboard.append([InlineKeyboardButton("Админ панель", callback_data='admin_panel')])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = get_main_menu_keyboard(user_id)
 
     text = f"Привет, {first_name}! Добро пожаловать в Blitz VPN Bot.\n\nВыберите действие:"
 
     await update.message.reply_text(text, reply_markup=reply_markup)
+
+async def show_main_menu(query):
+    """Show main menu."""
+    user_id = query.from_user.id
+    user = query.from_user
+
+    reply_markup = get_main_menu_keyboard(user_id)
+
+    text = f"Привет, {user.first_name}! Добро пожаловать в Blitz VPN Bot.\n\nВыберите действие:"
+
+    await query.edit_message_text(text, reply_markup=reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle button presses."""
@@ -68,7 +82,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if user_id in ADMIN_IDS:
             await show_admin_panel(query)
         else:
-            await query.edit_message_text("У вас нет доступа к админ панели.")
+            keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("У вас нет доступа к админ панели.", reply_markup=reply_markup)
+    elif data == 'back_to_menu':
+        await show_main_menu(query)
+    elif data == 'show_keys':
+        await show_keys(query, user_id)
     elif data.startswith('buy_'):
         plan = data.split('_')[1]
         await process_purchase(query, user_id, plan)
@@ -76,20 +96,51 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def show_profile(query, user_id):
     """Show user profile."""
     user = get_user(user_id)
+    subscription = get_active_subscription(user_id)
+    
+    keyboard = [
+        [InlineKeyboardButton("Ключи", callback_data='show_keys')],
+        [InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     if user:
-        text = f"Профиль:\nID: {user[0]}\nUsername: {user[1]}\nИмя: {user[2]} {user[3] or ''}\nСтатус подписки: {user[4]}"
+        status = "Активна" if subscription else "Не активирована"
+        text = f"Профиль:\nID: {user[0]}\nИмя пользователя: {user[1]}\nИмя: {user[2]} {user[3] or ''}\nСтатус подписки: {status}"
     else:
         text = "Профиль не найден."
 
-    await query.edit_message_text(text=text)
+    await query.edit_message_text(text=text, reply_markup=reply_markup)
+
+async def show_keys(query, user_id):
+    """Show user's VPN keys."""
+    subscription = get_active_subscription(user_id)
+    
+    keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if subscription:
+        plan, device_limit, vpn_username, vpn_password, vpn_key, end_date = subscription
+        if vpn_key:
+            text = f"Ваш VPN ключ:\n\n📝 <b>Ключ:</b>\n<code>{vpn_key}</code>\n\n⏰ <b>Действительно до:</b> {end_date}"
+        else:
+            text = "Ключ не найден. Обратитесь в поддержку."
+    else:
+        text = "У вас нет активной подписки."
+
+    await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_referral(query, user_id):
     """Show referral link."""
     referral_code = get_referral_code(user_id)
     referral_link = f"https://t.me/your_bot_username?start={referral_code}"
+    
+    keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     text = f"Ваша реферальная ссылка:\n{referral_link}\n\nПригласите друзей и получите бонусы!"
 
-    await query.edit_message_text(text=text)
+    await query.edit_message_text(text=text, reply_markup=reply_markup)
 
 async def show_subscription_plans(query):
     """Show available subscription plans."""
@@ -100,6 +151,9 @@ async def show_subscription_plans(query):
         button_text = f"{plan.capitalize()} - {details['price']}$ ({traffic_text}{device_text}, {details['expiration_days']} дней)"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f'buy_{plan}')])
 
+    # Add back button
+    keyboard.append([InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = "Выберите план подписки:"
 
@@ -109,7 +163,9 @@ async def process_purchase(query, user_id, plan):
     """Process subscription purchase."""
     details = SUBSCRIPTION_PLANS.get(plan)
     if not details:
-        await query.edit_message_text("Неверный план.")
+        keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("Неверный план.", reply_markup=reply_markup)
         return
 
     # Generate username and password
@@ -168,26 +224,37 @@ async def process_purchase(query, user_id, plan):
                 key = uri_response['ipv4']
             
             if key:
+                keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 text = f"✅ Подписка активирована!\n\n📝 <b>Ваш ключ:</b>\n<code>{key}</code>\n\nСохраните его в безопасном месте."
             else:
                 # If no keys available, show username and password as fallback
                 logger.warning(f"No keys available in response: {uri_response}")
+                keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 text = f"✅ Подписка активирована!\n\n👤 <b>Ваше имя пользователя:</b> {username}\n🔑 <b>Пароль:</b> {password}\n\n⚠️ Используйте эти учетные данные для входа в VPN."
         except Exception as e:
             logger.error(f"Error getting user URI: {e}")
             # If URI fails but user was created, still show success with credentials
+            keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             text = f"✅ Подписка активирована!\n\n👤 <b>Ваше имя пользователя:</b> {username}\n🔑 <b>Пароль:</b> {password}\n\nПожалуйста, используйте эти учетные данные для входа."
             
     except Exception as e:
         logger.error(f"Error processing purchase: {e}")
+        keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"❌ Ошибка при активации подписки:\n{str(e)}\n\nПожалуйста, свяжитесь с поддержкой."
 
-    await query.edit_message_text(text=text, parse_mode='HTML')
+    await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def show_help(query):
     """Show help information."""
+    keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     text = "Помощь:\n\n- Профиль: Просмотр информации о вашем аккаунте\n- Реферальная ссылка: Получите ссылку для приглашения друзей\n- Купить подписку: Выберите и оплатите план\n\nЕсли есть вопросы, обратитесь в поддержку."
-    await query.edit_message_text(text=text)
+    await query.edit_message_text(text=text, reply_markup=reply_markup)
 
 async def show_admin_panel(query):
     """Show admin panel."""
@@ -205,11 +272,16 @@ async def show_admin_panel(query):
         user_count = cursor.fetchone()[0]
         conn.close()
 
+        keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         text = f"Админ панель:\n\nОбщее количество пользователей: {user_count}\nОнлайн пользователей: {online_users}\nCPU: {cpu_usage}\nRAM: {ram_usage}"
     except Exception as e:
+        keyboard = [[InlineKeyboardButton("Вернуться в меню", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"Ошибка получения данных: {e}"
 
-    await query.edit_message_text(text=text)
+    await query.edit_message_text(text=text, reply_markup=reply_markup)
 
 def main() -> None:
     """Start the bot."""
