@@ -1,0 +1,11 @@
+# Telegram Bot Token (получить от @BotFather)
+TELEGRAM_BOT_TOKEN=your_token_here
+
+# Blitz VPN API Configuration
+# URL панели БЕЗ trailing slash и БЕЗ /api/v1
+# Пример: https://some.domain.com:someport/somelettersandnumbers
+BLITZ_API_BASE_URL=https://your_panel_url
+
+# Учетные данные админа панели
+BLITZ_API_USERNAME=admin
+BLITZ_API_PASSWORD=password
